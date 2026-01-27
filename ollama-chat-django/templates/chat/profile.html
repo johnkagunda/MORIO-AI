@@ -1,0 +1,91 @@
+{% extends 'chat/base.html' %}
+
+{% block title %}Profile - Ollama Chat{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>User Profile</h2>
+    
+    <div style="display: flex; gap: 2rem; align-items: center; margin-bottom: 2rem;">
+        {% if user.avatar %}
+            <img src="{{ user.avatar.url }}" alt="Avatar" style="width: 100px; height: 100px; border-radius: 50%;">
+        {% else %}
+            <div style="width: 100px; height: 100px; background: #007bff; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 2rem;">
+                {{ user.email|first|upper }}
+            </div>
+        {% endif %}
+        
+        <div>
+            <h3>{{ user.full_name }}</h3>
+            <p>{{ user.email }}</p>
+            <p>Member since {{ user.created_at|date:"F j, Y" }}</p>
+        </div>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem;">
+        <!-- Token Usage -->
+        <div class="card">
+            <h3>Token Usage</h3>
+            <div style="margin: 1rem 0;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                    <span>Used:</span>
+                    <span>{{ user.tokens_used }} tokens</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                    <span>Limit:</span>
+                    <span>{{ user.token_limit }} tokens</span>
+                </div>
+                <div style="background: #f1f1f1; height: 10px; border-radius: 5px; overflow: hidden;">
+                    <div style="background: #007bff; height: 100%; width: {{ user.tokens_used|divisibleby:user.token_limit|default:0 }}%;"></div>
+                </div>
+                <div style="text-align: center; margin-top: 0.5rem;">
+                    {{ user.tokens_used|divisibleby:user.token_limit|default:0 }}% used
+                </div>
+            </div>
+        </div>
+        
+        <!-- Account Info -->
+        <div class="card">
+            <h3>Account Information</h3>
+            <div style="margin-top: 1rem;">
+                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #eee;">
+                    <span>Status:</span>
+                    <span>
+                        {% if user.is_premium %}
+                            <span style="color: #28a745;">Premium</span>
+                        {% else %}
+                            <span style="color: #6c757d;">Free</span>
+                        {% endif %}
+                    </span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #eee;">
+                    <span>Default Model:</span>
+                    <span>{{ preferences.default_model }}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0;">
+                    <span>Chat Sessions:</span>
+                    <span>{{ user.chat_sessions.count }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Notifications -->
+    <div class="card" style="margin-top: 2rem;">
+        <h3>Notifications</h3>
+        {% if notifications %}
+            <ul style="list-style: none; margin-top: 1rem;">
+                {% for notification in notifications %}
+                    <li style="padding: 1rem; background: {% if not notification.is_read %}#f8f9fa{% else %}white{% endif %}; border-radius: 4px; margin-bottom: 0.5rem; border-left: 4px solid #007bff;">
+                        <strong>{{ notification.title }}</strong>
+                        <p style="margin: 0.5rem 0; color: #666;">{{ notification.message }}</p>
+                        <small style="color: #999;">{{ notification.created_at|timesince }} ago</small>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p style="text-align: center; color: #666; padding: 2rem;">No notifications</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

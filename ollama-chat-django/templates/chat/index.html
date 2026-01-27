@@ -1,0 +1,40 @@
+{% extends 'chat/base.html' %}
+
+{% block content %}
+<div style="background: white; padding: 2rem; border-radius: 5px; text-align: center;">
+    <h1>Welcome to BLUE TAIFA AI</h1>
+    <p>A Django application for chatting with AI models</p>
+    
+    <div id="status" style="margin: 2rem 0; padding: 1rem; background: #f8f9fa; border-radius: 5px;">
+        <p>Checking server status...</p>
+    </div>
+    
+    <div style="margin: 2rem 0;">
+        {% if user.is_authenticated %}
+            <a href="/chat/" class="btn" style="padding: 12px 24px; font-size: 1.1rem;">Go to Chat</a>
+        {% else %}
+            <a href="/register/" class="btn" style="padding: 12px 24px; font-size: 1.1rem;">Get Started</a>
+        {% endif %}
+        <a href="/api/health/" class="btn" style="padding: 12px 24px; font-size: 1.1rem;">Check Health</a>
+    </div>
+</div>
+
+<script>
+    // Check server status
+    fetch('/api/health/')
+        .then(response => response.json())
+        .then(data => {
+            const statusDiv = document.getElementById('status');
+            if (data.status === 'healthy') {
+                statusDiv.innerHTML = '<p style="color: green;">✅ Server is running and connected to Ollama</p>';
+            } else if (data.status === 'warning') {
+                statusDiv.innerHTML = `<p style="color: orange;">⚠ ${data.message}</p>`;
+            } else {
+                statusDiv.innerHTML = `<p style="color: red;">❌ ${data.message || 'Server error'}</p>`;
+            }
+        })
+        .catch(error => {
+            document.getElementById('status').innerHTML = '<p style="color: red;">❌ Cannot connect to server</p>';
+        });
+</script>
+{% endblock %}

@@ -1,0 +1,976 @@
+{% extends 'chat/base.html' %}
+
+{% block title %}Chat Interface{% endblock %}
+
+{% block content %}
+<div class="chat-container" style="height: 100%; display: flex; flex-direction: column;">
+    <!-- Main Chat Area -->
+    <div id="main-chat-area" style="flex: 1; display: flex; flex-direction: column; height: 100%;">
+        <!-- Chat Header -->
+        <div class="chat-header" style="padding: 1rem; border-bottom: 1px solid #4d4d4f; background: #343541; display: flex; align-items: center; gap: 1rem;">
+            <div style="flex: 1;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <h2 style="font-size: 1.125rem; font-weight: 600;" id="chat-title">MORIO AI</h2>
+                    <!-- SEARCH INDICATOR -->
+                    <span id="search-indicator" style="display: none; font-size: 0.75rem; background: #10a37f; color: white; padding: 0.15rem 0.5rem; border-radius: 0.75rem; font-weight: 500; position: relative; cursor: help;">
+                        <i class="fas fa-globe" style="margin-right: 0.25rem;"></i>Live
+                        <div class="search-indicator-tooltip">
+                            This response used real-time internet search
+                        </div>
+                    </span>
+                </div>
+                <p style="font-size: 0.875rem; color: #acacbe; margin-top: 0.25rem;">Model: MORIO V1</p>
+            </div>
+            <button id="clear-chat-btn" class="btn-outline" style="padding: 0.5rem 1rem;">
+                <i class="fas fa-trash-alt"></i>
+                <span class="mobile-hidden">Clear</span>
+            </button>
+        </div>
+        
+        <!-- Messages Container -->
+        <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 1rem; background: #343541;">
+            <div class="welcome-message" style="max-width: 800px; margin: 2rem auto; text-align: center; padding: 2rem;">
+                <div style="font-size: 2rem; margin-bottom: 1rem; color: #10a37f;">
+                    <i class="fas fa-robot"></i>
+                </div>
+                <h1 style="font-size: 2rem; font-weight: 600; margin-bottom: 1rem;">How can I help you today?</h1>
+                <p style="color: #acacbe; font-size: 0.875rem;">Start a conversation by typing below</p>
+            </div>
+        </div>
+        
+        <!-- Input Area -->
+        <div class="input-container" style="padding: 1rem; background: #343541; border-top: 1px solid #4d4d4f;">
+            <div style="max-width: 800px; margin: 0 auto; position: relative;">
+                <div style="position: relative;">
+                    <textarea 
+                        id="message-input" 
+                        placeholder="Message ChatGPT..." 
+                        rows="1"
+                        style="width: 100%; padding: 1rem 3rem 1rem 1rem; background: #40414f; color: #ececf1; border: 1px solid #565869; border-radius: 0.75rem; resize: none; font-size: 1rem; font-family: inherit; outline: none; max-height: 200px; overflow-y: auto;"
+                    ></textarea>
+                    <button 
+                        id="send-button" 
+                        style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: #acacbe; cursor: pointer; padding: 0.5rem; border-radius: 0.375rem; transition: background-color 0.2s;"
+                        onmouseover="this.style.backgroundColor='#4d4d4f'"
+                        onmouseout="this.style.backgroundColor='transparent'"
+                    >
+                        <i class="fas fa-paper-plane" style="font-size: 1.125rem;"></i>
+                    </button>
+                </div>
+                <div style="text-align: center; margin-top: 0.75rem;">
+                    <p style="font-size: 0.75rem; color: #acacbe;">
+                        MORIO can make mistakes. Consider checking important information.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    /* Chat message styles */
+    .message {
+        max-width: 800px;
+        margin: 0 auto 1.5rem;
+        padding: 1.5rem;
+        line-height: 1.6;
+        word-wrap: break-word;
+        position: relative;
+    }
+    
+    .user-message {
+        background: #343541;
+    }
+    
+    .ai-message {
+        background: #444654;
+    }
+    
+    .message-content {
+        display: flex;
+        gap: 1.5rem;
+    }
+    
+    .avatar {
+        width: 30px;
+        height: 30px;
+        border-radius: 0.125rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    
+    .user-avatar {
+        background: #10a37f;
+    }
+    
+    .ai-avatar {
+        background: #5436da;
+    }
+    
+    .text-content {
+        flex: 1;
+        padding-top: 0.125rem;
+        padding-right: 2rem; /* Space for copy button */
+    }
+    
+    .text-content p {
+        margin-bottom: 1rem;
+    }
+    
+    .text-content p:last-child {
+        margin-bottom: 0;
+    }
+    
+    .text-content code {
+        background: #2d2d2d;
+        color: #a9b7c6;
+        padding: 0.2em 0.4em;
+        border-radius: 0.25rem;
+        font-family: 'Courier New', monospace;
+        font-size: 0.9em;
+    }
+    
+    .text-content pre {
+        background: #2d2d2d;
+        color: #a9b7c6;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        overflow-x: auto;
+        margin: 1rem 0;
+        position: relative;
+    }
+    
+    .text-content pre .copy-btn {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        background: #40414f;
+        border: 1px solid #565869;
+        color: #ececf1;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-size: 0.75rem;
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.2s;
+        z-index: 10;
+    }
+    
+    .text-content pre:hover .copy-btn {
+        opacity: 1;
+    }
+    
+    .text-content blockquote {
+        border-left: 3px solid #10a37f;
+        margin: 1rem 0;
+        padding-left: 1rem;
+        color: #acacbe;
+    }
+    
+    /* Copy button styles */
+    .copy-btn-container {
+        position: absolute;
+        top: 1rem;
+        right: 1rem;
+        opacity: 0;
+        transition: opacity 0.2s;
+        z-index: 5;
+    }
+    
+    .message:hover .copy-btn-container {
+        opacity: 1;
+    }
+    
+    .copy-btn {
+        background: #40414f;
+        border: 1px solid #565869;
+        color: #ececf1;
+        padding: 0.5rem;
+        border-radius: 0.375rem;
+        cursor: pointer;
+        font-size: 0.875rem;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+    }
+    
+    .copy-btn:hover {
+        background: #565869;
+        color: white;
+    }
+    
+    .copy-btn.copied {
+        background: #10a37f;
+        border-color: #10a37f;
+        color: white;
+    }
+    
+    .copy-btn.copied .fa-copy {
+        display: none;
+    }
+    
+    .copy-btn.copied .fa-check {
+        display: inline-block;
+    }
+    
+    .copy-btn .fa-check {
+        display: none;
+    }
+    
+    .typing-indicator {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        color: #acacbe;
+        font-style: italic;
+        margin: 8px 0;
+    }
+    
+    .typing-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background-color: #acacbe;
+        animation: typing-bounce 1.4s infinite ease-in-out both;
+    }
+    
+    .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+    .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+    
+    @keyframes typing-bounce {
+        0%, 80%, 100% { transform: scale(0.6); opacity: 0.6; }
+        40% { transform: scale(1); opacity: 1; }
+    }
+    
+    /* Copy feedback notification */
+    .copy-notification {
+        position: fixed;
+        top: 80px;
+        right: 20px;
+        background: #10a37f;
+        color: white;
+        padding: 0.75rem 1rem;
+        border-radius: 0.375rem;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        z-index: 9999;
+        animation: slideIn 0.3s ease, fadeOut 0.3s ease 1.7s forwards;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    @keyframes slideIn {
+        from {
+            transform: translateX(100%);
+            opacity: 0;
+        }
+        to {
+            transform: translateX(0);
+            opacity: 1;
+        }
+    }
+    
+    @keyframes fadeOut {
+        from {
+            opacity: 1;
+        }
+        to {
+            opacity: 0;
+        }
+    }
+    
+    /* Search Indicator Styles */
+    .search-indicator-tooltip {
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #1f1f23;
+        color: white;
+        padding: 0.5rem 0.75rem;
+        border-radius: 0.375rem;
+        font-size: 0.75rem;
+        white-space: nowrap;
+        z-index: 100;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        border: 1px solid #4d4d4f;
+        margin-top: 0.5rem;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.2s, visibility 0.2s;
+    }
+    
+    #search-indicator:hover .search-indicator-tooltip {
+        opacity: 1;
+        visibility: visible;
+    }
+    
+    .search-indicator-tooltip::before {
+        content: '';
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        border-width: 0.4rem;
+        border-style: solid;
+        border-color: transparent transparent #1f1f23 transparent;
+    }
+    
+    /* Search notification */
+    .search-notification {
+        position: fixed;
+        top: 80px;
+        right: 20px;
+        background: #5436da;
+        color: white;
+        padding: 0.75rem 1rem;
+        border-radius: 0.375rem;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        z-index: 9999;
+        animation: slideIn 0.3s ease, fadeOut 0.3s ease 2s forwards;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        max-width: 300px;
+    }
+    
+    /* Scrollbar styling */
+    #chat-messages::-webkit-scrollbar {
+        width: 8px;
+    }
+    
+    #chat-messages::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    
+    #chat-messages::-webkit-scrollbar-thumb {
+        background: #565869;
+        border-radius: 4px;
+    }
+    
+    #chat-messages::-webkit-scrollbar-thumb:hover {
+        background: #6d6d7a;
+    }
+</style>
+
+<script>
+    // Global variables for session management
+    let currentSessionId = null;
+    let isNewSession = false;
+    
+    // Check URL for session parameter on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const sessionId = urlParams.get('session');
+        
+        if (sessionId) {
+            loadChatSession(sessionId);
+        }
+        
+        // Focus input on load
+        textarea.focus();
+    });
+    
+    // Expose these functions to base.html
+    window.loadChatSession = async function(sessionId) {
+        currentSessionId = sessionId;
+        isNewSession = false;
+        
+        try {
+            // Show loading state
+            const messagesDiv = document.getElementById('chat-messages');
+            messagesDiv.innerHTML = `
+                <div style="max-width: 800px; margin: 2rem auto; text-align: center; padding: 2rem;">
+                    <div class="spinner" style="margin: 0 auto 1rem; width: 40px; height: 40px; border-width: 3px;"></div>
+                    <p style="color: #acacbe;">Loading conversation...</p>
+                </div>
+            `;
+            
+            // Fetch session history
+            const response = await fetch(`/api/chat/sessions/${sessionId}/`);
+            const data = await response.json();
+            
+            if (data.success) {
+                // Update chat title
+                document.getElementById('chat-title').textContent = data.session.title || 'MORIO AI';
+                
+                // Clear and display messages
+                messagesDiv.innerHTML = '';
+                
+                if (data.messages.length === 0) {
+                    showWelcomeMessage();
+                } else {
+                    data.messages.forEach(message => {
+                        const messageElement = createMessageElement(message.role, message.content);
+                        messagesDiv.appendChild(messageElement);
+                    });
+                    
+                    // Add copy buttons to existing messages
+                    addCopyButtonsToMessages();
+                    
+                    // Scroll to bottom
+                    setTimeout(() => {
+                        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    }, 100);
+                }
+            } else {
+                throw new Error(data.error || 'Failed to load session');
+            }
+            
+        } catch (error) {
+            console.error('Error loading session:', error);
+            showWelcomeMessage();
+            alert('Failed to load conversation: ' + error.message);
+        }
+    };
+    
+    window.startNewChat = function() {
+        currentSessionId = null;
+        isNewSession = true;
+        
+        // Clear messages and show welcome
+        clearChatMessages();
+        showWelcomeMessage();
+        
+        // Update chat title
+        document.getElementById('chat-title').textContent = 'MORIO AI';
+        
+        // Reset search indicator
+        resetSearchIndicator();
+        
+        // Update URL without reload
+        const url = new URL(window.location);
+        url.searchParams.delete('session');
+        window.history.replaceState({}, '', url);
+    };
+    
+    // Clear chat button
+    document.getElementById('clear-chat-btn').addEventListener('click', () => {
+        clearChatMessages();
+        showWelcomeMessage();
+        resetSearchIndicator();
+    });
+    
+    // Auto-resize textarea
+    const textarea = document.getElementById('message-input');
+    textarea.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+    });
+    
+    // Send message function
+    async function sendMessage() {
+        const input = textarea;
+        const sendButton = document.getElementById('send-button');
+        const message = input.value.trim();
+        
+        if (!message) return;
+        
+        // Disable input and button during streaming
+        input.disabled = true;
+        sendButton.disabled = true;
+        sendButton.style.opacity = '0.5';
+        
+        // Reset search indicator for new response
+        resetSearchIndicator();
+        
+        // Remove welcome message if present
+        const welcomeMsg = document.getElementById('chat-messages').querySelector('.welcome-message');
+        if (welcomeMsg) {
+            welcomeMsg.remove();
+        }
+        
+        // Add user message to chat
+        const messagesDiv = document.getElementById('chat-messages');
+        const userMessage = createMessageElement('user', message);
+        messagesDiv.appendChild(userMessage);
+        
+        // Add copy button to the user message
+        addCopyButtonToMessage(userMessage);
+        
+        // Clear input and reset height
+        input.value = '';
+        input.style.height = 'auto';
+        
+        // Create AI message container for streaming
+        const aiMessageId = 'ai-message-' + Date.now();
+        const aiMessage = createMessageElement('ai', '');
+        aiMessage.id = aiMessageId;
+        
+        // Add typing indicator
+        const typingDiv = document.createElement('div');
+        typingDiv.className = 'typing-indicator';
+        typingDiv.innerHTML = `
+            <span>AI is thinking</span>
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+        `;
+        aiMessage.querySelector('.text-content').appendChild(typingDiv);
+        messagesDiv.appendChild(aiMessage);
+        
+        // Scroll to bottom
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        
+        try {
+            // Prepare request data
+            const requestData = {
+                prompt: message,
+                stream: true
+            };
+            
+            // Add session_id if we have one
+            if (currentSessionId) {
+                requestData.session_id = currentSessionId;
+            }
+            
+            // If it's a new chat, start a new session
+            if (!currentSessionId || isNewSession) {
+                requestData.new_session = true;
+                isNewSession = false;
+            }
+            
+            // Send to API with streaming enabled
+            const response = await fetch('/api/chat/send/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify(requestData)
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            // Remove typing indicator
+            typingDiv.remove();
+            
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let fullResponse = '';
+            let receivedSessionId = null;
+            let searchUsed = false;
+            
+            const textContent = aiMessage.querySelector('.text-content');
+            
+            // Process the stream
+            while (true) {
+                const { done, value } = await reader.read();
+                
+                if (done) break;
+                
+                // Decode the chunk
+                buffer += decoder.decode(value, { stream: true });
+                
+                // Process complete SSE events
+                const events = buffer.split('\n\n');
+                buffer = events.pop();
+                
+                for (const event of events) {
+                    if (event.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(event.substring(6));
+                            
+                            // Handle search indicator
+                            if (data.search_used !== undefined) {
+                                if (data.search_used) {
+                                    searchUsed = true;
+                                    updateSearchIndicator(true);
+                                    console.log("🔍 Response used real-time internet data");
+                                    
+                                    // Show search notification
+                                    showSearchNotification();
+                                } else {
+                                    updateSearchIndicator(false);
+                                }
+                            }
+                            
+                            if (data.chunk) {
+                                fullResponse += data.chunk;
+                                textContent.innerHTML = formatMessage(fullResponse);
+                                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                            }
+                            
+                            if (data.done) {
+                                textContent.innerHTML = formatMessage(fullResponse);
+                                
+                                // Add copy buttons to code blocks in the AI response
+                                addCopyButtonsToCodeBlocks(textContent);
+                                
+                                // Add copy button to the entire AI message
+                                addCopyButtonToMessage(aiMessage);
+                                
+                                // Store session ID from response if provided
+                                if (data.session_id) {
+                                    receivedSessionId = data.session_id;
+                                    currentSessionId = data.session_id;
+                                    
+                                    // Update global session in base.html
+                                    if (typeof window.updateCurrentSession === 'function') {
+                                        window.updateCurrentSession(data.session_id);
+                                    }
+                                    
+                                    // Update URL without reloading
+                                    const url = new URL(window.location);
+                                    url.searchParams.set('session', data.session_id);
+                                    window.history.replaceState({}, '', url);
+                                }
+                                
+                                // Add metadata if available
+                                if (data.time) {
+                                    const metaDiv = document.createElement('div');
+                                    metaDiv.style.fontSize = '0.8em';
+                                    metaDiv.style.color = '#acacbe';
+                                    metaDiv.style.marginTop = '1rem';
+                                    metaDiv.style.fontStyle = 'italic';
+                                    metaDiv.textContent = `Generated in ${data.time}`;
+                                    textContent.appendChild(metaDiv);
+                                }
+                                
+                                // Update chat title with session title
+                                if (data.session_title && document.getElementById('chat-title')) {
+                                    document.getElementById('chat-title').textContent = data.session_title;
+                                }
+                                
+                                // Hide search indicator if response complete and search not used
+                                if (!searchUsed) {
+                                    updateSearchIndicator(false);
+                                }
+                            }
+                            
+                            if (data.error) {
+                                textContent.innerHTML = `<span style="color: #ef4444;">Error: ${data.error}</span>`;
+                                throw new Error(data.error);
+                            }
+                            
+                        } catch (e) {
+                            console.error('Error parsing SSE data:', e);
+                        }
+                    }
+                }
+            }
+            
+        } catch (error) {
+            console.error('Chat error:', error);
+            
+            // Remove typing indicator if it exists
+            if (typingDiv.parentNode) {
+                typingDiv.remove();
+            }
+            
+            // Show error message
+            aiMessage.querySelector('.text-content').innerHTML = 
+                `<span style="color: #ef4444; font-weight: bold;">Error: ${error.message}</span>`;
+            
+            // Reset search indicator on error
+            resetSearchIndicator();
+            
+        } finally {
+            // Re-enable input and button
+            input.disabled = false;
+            sendButton.disabled = false;
+            sendButton.style.opacity = '1';
+            input.focus();
+            
+            // Scroll to bottom
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
+            // Refresh sessions list in sidebar
+            if (typeof window.refreshChatSessions === 'function') {
+                window.refreshChatSessions();
+            }
+        }
+    }
+    
+    // Function to update search indicator
+    function updateSearchIndicator(show) {
+        const searchIndicator = document.getElementById('search-indicator');
+        if (show) {
+            searchIndicator.style.display = 'inline-flex';
+            searchIndicator.style.alignItems = 'center';
+        } else {
+            searchIndicator.style.display = 'none';
+        }
+    }
+    
+    // Function to reset search indicator
+    function resetSearchIndicator() {
+        updateSearchIndicator(false);
+    }
+    
+    // Function to show search notification
+    function showSearchNotification() {
+        // Remove existing notification
+        const existingNotification = document.querySelector('.search-notification');
+        if (existingNotification) {
+            existingNotification.remove();
+        }
+        
+        const notification = document.createElement('div');
+        notification.className = 'search-notification';
+        
+        notification.innerHTML = `
+            <i class="fas fa-globe"></i>
+            <div>
+                <strong>Live Data Used</strong>
+                <div style="font-size: 0.8rem; opacity: 0.9;">This response used real-time internet search</div>
+            </div>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Remove notification after animation
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.remove();
+            }
+        }, 2500);
+    }
+    
+    // Helper function to create message element
+    function createMessageElement(sender, text) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${sender}-message`;
+        
+        const isUser = sender === 'user';
+        const avatarBg = isUser ? '#10a37f' : '#5436da';
+        const avatarIcon = isUser ? 'fas fa-user' : 'fas fa-robot';
+        
+        messageDiv.innerHTML = `
+            <div class="message-content">
+                <div class="avatar" style="background: ${avatarBg};">
+                    <i class="${avatarIcon}" style="color: white; font-size: 0.875rem;"></i>
+                </div>
+                <div class="text-content">
+                    ${isUser ? escapeHtml(text) : formatMessage(text)}
+                </div>
+            </div>
+            <div class="copy-btn-container">
+                <button class="copy-btn" title="Copy to clipboard">
+                    <i class="fas fa-copy"></i>
+                    <i class="fas fa-check"></i>
+                </button>
+            </div>
+        `;
+        
+        return messageDiv;
+    }
+    
+    // Add copy button to a single message
+    function addCopyButtonToMessage(messageElement) {
+        const copyBtnContainer = messageElement.querySelector('.copy-btn-container');
+        const copyBtn = copyBtnContainer.querySelector('.copy-btn');
+        const textContent = messageElement.querySelector('.text-content');
+        
+        copyBtn.addEventListener('click', async function(e) {
+            e.stopPropagation();
+            
+            try {
+                // Get the text content, removing HTML tags but preserving formatting
+                let textToCopy = textContent.innerText || textContent.textContent;
+                
+                // If it's a code block, get the raw text
+                const preElement = textContent.querySelector('pre');
+                if (preElement) {
+                    const codeElement = preElement.querySelector('code');
+                    textToCopy = codeElement ? codeElement.textContent : preElement.textContent;
+                }
+                
+                // Copy to clipboard
+                await navigator.clipboard.writeText(textToCopy);
+                
+                // Show success feedback
+                copyBtn.classList.add('copied');
+                
+                // Show notification
+                showCopyNotification('Copied to clipboard!');
+                
+                // Reset button after 2 seconds
+                setTimeout(() => {
+                    copyBtn.classList.remove('copied');
+                }, 2000);
+                
+            } catch (error) {
+                console.error('Failed to copy:', error);
+                showCopyNotification('Failed to copy', true);
+            }
+        });
+    }
+    
+    // Add copy buttons to all existing messages
+    function addCopyButtonsToMessages() {
+        const messages = document.querySelectorAll('.message');
+        messages.forEach(message => {
+            if (!message.querySelector('.copy-btn-container .copy-btn')) {
+                const copyBtnContainer = document.createElement('div');
+                copyBtnContainer.className = 'copy-btn-container';
+                copyBtnContainer.innerHTML = `
+                    <button class="copy-btn" title="Copy to clipboard">
+                        <i class="fas fa-copy"></i>
+                        <i class="fas fa-check"></i>
+                    </button>
+                `;
+                message.appendChild(copyBtnContainer);
+                addCopyButtonToMessage(message);
+            }
+        });
+    }
+    
+    // Add copy buttons to code blocks within messages
+    function addCopyButtonsToCodeBlocks(container) {
+        const codeBlocks = container.querySelectorAll('pre');
+        codeBlocks.forEach(pre => {
+            if (!pre.querySelector('.copy-btn')) {
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'copy-btn';
+                copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+                copyBtn.title = 'Copy code';
+                pre.appendChild(copyBtn);
+                
+                copyBtn.addEventListener('click', async function(e) {
+                    e.stopPropagation();
+                    
+                    try {
+                        const codeElement = pre.querySelector('code');
+                        const textToCopy = codeElement ? codeElement.textContent : pre.textContent;
+                        
+                        await navigator.clipboard.writeText(textToCopy);
+                        
+                        // Show success feedback
+                        const originalHTML = copyBtn.innerHTML;
+                        copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+                        copyBtn.style.background = '#10a37f';
+                        copyBtn.style.borderColor = '#10a37f';
+                        
+                        showCopyNotification('Code copied!');
+                        
+                        // Reset button after 2 seconds
+                        setTimeout(() => {
+                            copyBtn.innerHTML = originalHTML;
+                            copyBtn.style.background = '';
+                            copyBtn.style.borderColor = '';
+                        }, 2000);
+                        
+                    } catch (error) {
+                        console.error('Failed to copy code:', error);
+                        showCopyNotification('Failed to copy code', true);
+                    }
+                });
+            }
+        });
+    }
+    
+    // Show copy notification
+    function showCopyNotification(message, isError = false) {
+        // Remove existing notification
+        const existingNotification = document.querySelector('.copy-notification');
+        if (existingNotification) {
+            existingNotification.remove();
+        }
+        
+        const notification = document.createElement('div');
+        notification.className = 'copy-notification';
+        notification.style.background = isError ? '#ef4444' : '#10a37f';
+        
+        notification.innerHTML = `
+            <i class="fas ${isError ? 'fa-exclamation-circle' : 'fa-check'}"></i>
+            <span>${message}</span>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Remove notification after animation
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.remove();
+            }
+        }, 2000);
+    }
+    
+    // Helper function to format message with markdown-like syntax
+    function formatMessage(text) {
+        if (!text) return '';
+        
+        // Escape HTML
+        let formatted = escapeHtml(text);
+        
+        // Convert markdown-like syntax
+        formatted = formatted
+            .replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>')
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/`([^`]+)`/g, '<code>$1</code>')
+            .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+            .replace(/^> (.*$)/gm, '<blockquote>$1</blockquote>')
+            .replace(/\n/g, '<br>');
+        
+        return formatted;
+    }
+    
+    // Helper function to escape HTML
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    // Utility function to get CSRF token
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+    
+    // Handle Enter key (without Shift) to send message
+    textarea.addEventListener('keydown', function(event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            sendMessage();
+        }
+    });
+    
+    // Send button click handler
+    document.getElementById('send-button').addEventListener('click', sendMessage);
+    
+    // Helper functions
+    function clearChatMessages() {
+        const messagesDiv = document.getElementById('chat-messages');
+        messagesDiv.innerHTML = '';
+    }
+    
+    function showWelcomeMessage() {
+        const messagesDiv = document.getElementById('chat-messages');
+        const welcomeDiv = document.createElement('div');
+        welcomeDiv.className = 'welcome-message';
+        welcomeDiv.style.cssText = 'max-width: 800px; margin: 2rem auto; text-align: center; padding: 2rem;';
+        welcomeDiv.innerHTML = `
+            <div style="font-size: 2rem; margin-bottom: 1rem; color: #10a37f;">
+                <i class="fas fa-robot"></i>
+            </div>
+            <h1 style="font-size: 2rem; font-weight: 600; margin-bottom: 1rem;">How can I help you today?</h1>
+            <p style="color: #acacbe; font-size: 0.875rem;">Start a conversation by typing below</p>
+        `;
+        messagesDiv.appendChild(welcomeDiv);
+        
+        // Scroll to top
+        messagesDiv.scrollTop = 0;
+    }
+</script>
+{% endblock %}
