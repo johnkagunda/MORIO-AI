@@ -1,0 +1,13 @@
+{% extends "admin/change_list.html" %}
+{% load i18n %}
+
+{% block content %}
+<div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px;">
+    <h3>📚 RAG System Information</h3>
+    <p>Total Documents: {{ cl.result_count }}</p>
+    <p>Documents with embeddings: {{ embeddings_count }}</p>
+    <a href="{% url 'admin:RAG_businessdocument_add' %}" class="button" style="margin-right: 10px;">➕ Add Document</a>
+    <a href="/rag/generate-embeddings/" class="button" onclick="return confirm('Generate embeddings for all documents?')">🔧 Generate Embeddings</a>
+</div>
+{{ block.super }}
+{% endblock %}

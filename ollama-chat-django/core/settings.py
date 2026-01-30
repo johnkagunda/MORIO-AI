@@ -51,12 +51,26 @@ INSTALLED_APPS = [
     
     # Local apps
     'chat',
+    'RAG'
 ]
+
+
+# Add to settings.py
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+        'TIMEOUT': 300,  # 5 minutes
+        'OPTIONS': {
+            'MAX_ENTRIES': 1000,
+        }
+    }
+}
 
 MIDDLEWARE = [
     # CORS middleware should be at the top
     'corsheaders.middleware.CorsMiddleware',
-    
+    'django.middleware.cache.UpdateCacheMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -396,3 +410,9 @@ print(f"[SETTINGS] DEBUG mode: {DEBUG}")
 print(f"[SETTINGS] ALLOWED_HOSTS: {ALLOWED_HOSTS}")
 print(f"[SETTINGS] CSRF_TRUSTED_ORIGINS: {CSRF_TRUSTED_ORIGINS}")
 print(f"[SETTINGS] CORS_ALLOW_ALL_ORIGINS: {CORS_ALLOW_ALL_ORIGINS}")
+
+
+# Force HTTPS redirects to HTTP for development
+SECURE_SSL_REDIRECT = False
+SESSION_COOKIE_SECURE = False
+CSRF_COOKIE_SECURE = False

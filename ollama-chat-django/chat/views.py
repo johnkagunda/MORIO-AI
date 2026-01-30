@@ -10,6 +10,24 @@ import sys
 import platform
 import time
 from .models import User, ChatSession, ChatMessage
+import os
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Try to import RAG service
+try:
+    from RAG.rag_service import RAGService
+    rag_service = RAGService()
+    RAG_AVAILABLE = True
+    print("✅ RAG service loaded successfully")
+except ImportError as e:
+    print(f"⚠️ RAG not available: {e}")
+    RAG_AVAILABLE = False
+except Exception as e:
+    print(f"⚠️ RAG service error: {e}")
+    RAG_AVAILABLE = False
+
+
 
 # ========== WEB VIEWS ==========
 
@@ -384,7 +402,7 @@ def update_session_title(request, session_id):
 @csrf_exempt
 @login_required
 def chat_api(request):
-    """Chat API with streaming support - Let model handle identity naturally"""
+    """Chat API with streaming support - ALWAYS checks RAG database"""
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
     
@@ -429,34 +447,75 @@ def chat_api(request):
             content=prompt
         )
         
-        # ========== BUILD CONTEXT FROM HISTORY ==========
-        # SIMPLIFIED: Let the model handle identity naturally from its SYSTEM prompt
+        # ========== BUILD PROMPT WITH RAG ==========
+        # ALWAYS try to use RAG first
+        relevant_docs = []
+        rag_context = ""
+        
+        if RAG_AVAILABLE:
+            try:
+                # Get relevant documents from RAG
+                relevant_docs = rag_service.search_documents(prompt, top_k=5)
+                print(f"📄 Found {len(relevant_docs)} relevant documents in database")
+                
+                # Build RAG context - SIMPLE AND CLEAN
+                if relevant_docs:
+                    rag_context = ""
+                    for doc in relevant_docs:
+                        rag_context += f"{doc.content}\n\n"
+                    
+            except Exception as e:
+                print(f"⚠️ RAG search error: {e}")
+                relevant_docs = []
+        
+        # ========== BUILD CHAT HISTORY ==========
         previous_messages = ChatMessage.objects.filter(
             session=chat_session
         ).exclude(id=user_message.id).order_by('created_at')[:10]
         
-        context_prompt = ""
+        history_context = ""
         for msg in previous_messages:
             if msg.role == 'user':
-                context_prompt += f"Human: {msg.content}\n"
+                history_context += f"User: {msg.content}\n"
             elif msg.role == 'assistant':
-                context_prompt += f"Assistant: {msg.content}\n"
+                history_context += f"Assistant: {msg.content}\n"
         
-        full_prompt = f"{context_prompt}Human: {prompt}\nAssistant: "
-        print(f"📝 Context length: {len(context_prompt)} chars")
+        print(f"📝 History length: {len(history_context)} chars")
+        
+        # ========== BUILD FINAL PROMPT ==========
+        if relevant_docs:
+            # SIMPLE DIRECT PROMPT
+            full_prompt = f"""Here is company information:
+
+{rag_context}
+
+Question: {prompt}
+
+Answer the question using ONLY the information above. Be specific and direct."""
+
+            print(f"🤖 Using RAG context with {len(relevant_docs)} documents")
+        else:
+            # If no relevant documents, just use history
+            full_prompt = f"""{history_context}
+
+User: {prompt}
+
+Assistant: """
+            print(f"🤖 No relevant documents found")
+        
+        print(f"📋 Final prompt length: {len(full_prompt)} chars")
         
         # ========== STREAMING RESPONSE ==========
         stream_requested = data.get('stream', True)
         
         if not stream_requested:
             return chat_api_non_streaming_with_history(
-                request, prompt, full_prompt, chat_session
+                request, prompt, full_prompt, chat_session, relevant_docs
             )
         
         # ========== FORCE MORIO-PHI MODEL ==========
         model_name = "morio-phi:latest"
         print(f"🎯 FORCING MODEL: {model_name}")
-        print(f"📁 Session ID: {chat_session.id}")
         
         # Ollama request data
         ollama_data = {
@@ -464,10 +523,10 @@ def chat_api(request):
             "prompt": full_prompt,
             "stream": True,
             "options": {
-                "num_predict": 100,
-                "temperature": 0.3,
+                "num_predict": 150,
+                "temperature": 0.7,  # Normal temperature
                 "num_thread": 4,
-                "num_ctx": 1024,
+                "num_ctx": 2048,
                 "top_k": 20,
                 "top_p": 0.8,
             }
@@ -484,7 +543,7 @@ def chat_api(request):
                     "http://localhost:11434/api/generate",
                     json=ollama_data,
                     stream=True,
-                    timeout=100
+                    timeout=120
                 )
                 
                 if response.status_code == 200:
@@ -520,6 +579,7 @@ def chat_api(request):
                                     
                                     chat_session.save()
                                     
+                                    # Prepare completion data
                                     completion_data = {
                                         'done': True,
                                         'full_response': full_response,
@@ -528,8 +588,23 @@ def chat_api(request):
                                         'session_title': chat_session.title,
                                         'time': f"{response_time:.1f}s",
                                         'tokens': tokens_received,
-                                        'success': True
+                                        'success': True,
+                                        'rag_used': len(relevant_docs) > 0
                                     }
+                                    
+                                    # Add sources if RAG found documents
+                                    if relevant_docs:
+                                        sources = []
+                                        for doc in relevant_docs:
+                                            sources.append({
+                                                'id': doc.id,
+                                                'title': doc.title,
+                                                'type': doc.get_document_type_display(),
+                                                'preview': doc.content[:150] + '...' if len(doc.content) > 150 else doc.content
+                                            })
+                                        completion_data['sources'] = sources
+                                        completion_data['source_count'] = len(sources)
+                                    
                                     completion_json = json.dumps(completion_data)
                                     yield f"data: {completion_json}\n\n"
                                     break
@@ -580,7 +655,7 @@ def chat_api(request):
         }, status=500)
 
 
-def chat_api_non_streaming_with_history(request, prompt, full_prompt, chat_session):
+def chat_api_non_streaming_with_history(request, prompt, full_prompt, chat_session, relevant_docs=None):
     """Non-streaming fallback with history"""
     model_name = "morio-phi:latest"
     print(f"🎯 FORCING MODEL (non-streaming): {model_name}")
@@ -590,12 +665,10 @@ def chat_api_non_streaming_with_history(request, prompt, full_prompt, chat_sessi
         "prompt": full_prompt,
         "stream": False,
         "options": {
-            "num_predict": 100,
-            "temperature": 0.3,
+            "num_predict": 150,
+            "temperature": 0.7,
             "num_thread": 4,
-            "num_ctx": 1024,
-            "top_k": 20,
-            "top_p": 0.8,
+            "num_ctx": 2048,
         }
     }
     
@@ -625,15 +698,31 @@ def chat_api_non_streaming_with_history(request, prompt, full_prompt, chat_sessi
             
             chat_session.save()
             
-            return JsonResponse({
+            response_data = {
                 'success': True,
                 'response': ai_response,
                 'model': actual_model,
                 'session_id': str(chat_session.id),
                 'session_title': chat_session.title,
                 'time': f"{response_time:.1f}s",
-                'tokens': result.get('eval_count', 0)
-            })
+                'tokens': result.get('eval_count', 0),
+                'rag_used': relevant_docs is not None and len(relevant_docs) > 0
+            }
+            
+            # Add sources if RAG found documents
+            if relevant_docs:
+                sources = []
+                for doc in relevant_docs:
+                    sources.append({
+                        'id': doc.id,
+                        'title': doc.title,
+                        'type': doc.get_document_type_display(),
+                        'preview': doc.content[:100] + '...'
+                    })
+                response_data['sources'] = sources
+                response_data['source_count'] = len(sources)
+            
+            return JsonResponse(response_data)
         else:
             print(f"❌ Error {response.status_code}")
             return JsonResponse({
@@ -649,7 +738,6 @@ def chat_api_non_streaming_with_history(request, prompt, full_prompt, chat_sessi
             'error': str(e),
             'session_id': str(chat_session.id)
         }, status=500)
-
 
 def get_available_models():
     """Helper to get available models"""
