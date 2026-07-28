@@ -7,7 +7,7 @@ class RAGService:
         # Try to load embedding model
         self.model = None
         self.np = None
-        self.has_embeddings = False
+        self.has_embeddings = 
         
         try:
             # Import inside try block
