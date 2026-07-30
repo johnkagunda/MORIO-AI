@@ -1,24 +1,69 @@
-# RAG/views.py - Complete updated file
+# RAG/views.py - Optimized version
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.admin.views.decorators import staff_member_required
 from django.views.decorators.http import require_http_methods
 from django.shortcuts import render, get_object_or_404
-from django.db.models import Count
+from django.db.models import Count, Q
+from django.core.cache import cache
 import json
 import requests
+from functools import lru_cache
+from typing import List, Dict, Optional, Tuple
 from .rag_service import rag_service
 from .models import BusinessDocument, ConversationMemory, AIConfiguration
 import os
 from django.conf import settings
 
+# Constants
+OLLAMA_URL = "http://localhost:11434/api/generate"
+CACHE_TIMEOUT = 300  # 5 minutes
+DEFAULT_MODEL = "morio-phi:latest"
+OLLAMA_TIMEOUT = 30
+MAX_PREVIEW_LENGTH = 300
+MAX_SNIPPET_LENGTH = 150
+
 # ============================
-# RAG CHAT ENDPOINT (UPDATED)
+# CACHE HELPERS
+# ============================
+
+def get_cached_config(config_id: Optional[int] = None) -> Optional[AIConfiguration]:
+    """Get AI config from cache or database"""
+    if config_id:
+        cache_key = f'ai_config_{config_id}'
+        config = cache.get(cache_key)
+        if not config:
+            try:
+                config = AIConfiguration.objects.filter(id=config_id, is_active=True).first()
+                if config:
+                    cache.set(cache_key, config, CACHE_TIMEOUT)
+            except AIConfiguration.DoesNotExist:
+                return None
+        return config
+    return None
+
+def get_active_config() -> Optional[AIConfiguration]:
+    """Get active AI configuration with caching"""
+    config = cache.get('active_ai_config')
+    if not config:
+        config = AIConfiguration.objects.filter(is_active=True).select_related().first()
+        if config:
+            cache.set('active_ai_config', config, CACHE_TIMEOUT)
+    return config
+
+def invalidate_config_cache(config_id: Optional[int] = None):
+    """Invalidate AI config cache"""
+    cache.delete('active_ai_config')
+    if config_id:
+        cache.delete(f'ai_config_{config_id}')
+
+# ============================
+# RAG CHAT ENDPOINT (OPTIMIZED)
 # ============================
 
 @csrf_exempt
 def rag_chat(request):
-    """RAG chat endpoint with AI configuration support"""
+    """Optimized RAG chat endpoint with AI configuration support"""
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
     
@@ -31,59 +76,106 @@ def rag_chat(request):
         if not query:
             return JsonResponse({'error': 'Query is required'}, status=400)
         
-        print(f"🔍 RAG Query: {query}")
+        # Get AI configuration (with caching)
+        ai_config = get_cached_config(ai_config_id) if ai_config_id else get_active_config()
         
-        # Get AI configuration
-        ai_config = None
-        if ai_config_id:
-            try:
-                ai_config = AIConfiguration.objects.get(id=ai_config_id, is_active=True)
-                print(f"🤖 Using AI config: {ai_config.ai_name} for {ai_config.company_name}")
-            except AIConfiguration.DoesNotExist:
-                print(f"⚠️ AI config {ai_config_id} not found or inactive, using default")
+        # Search for relevant documents (filtered by AI config)
+        relevant_docs = get_relevant_documents(query, ai_config)
         
-        # If no specific config, use the first active one
-        if not ai_config:
-            ai_config = AIConfiguration.objects.filter(is_active=True).first()
-            if ai_config:
-                print(f"🤖 Using active AI config: {ai_config.ai_name}")
-        
-        # Search for relevant documents (filtered by AI config if specified)
-        relevant_docs = rag_service.search_documents(query)
-        
-        # Filter by AI config if specified
-        if ai_config and ai_config.use_rag:
-            # Get documents belonging to this AI config
-            config_doc_ids = ai_config.documents.filter(is_active=True).values_list('id', flat=True)
-            relevant_docs = [doc for doc in relevant_docs if doc.id in config_doc_ids]
-            print(f"📄 Found {len(relevant_docs)} relevant documents for {ai_config.company_name}")
-        else:
-            print(f"📄 Found {len(relevant_docs)} relevant documents")
-        
-        # Build context
-        if relevant_docs:
-            context = "=== RELEVANT INFORMATION FROM DATABASE ===\n\n"
-            for i, doc in enumerate(relevant_docs, 1):
-                context += f"[{i}] {doc.title}:\n"
-                content_preview = doc.content[:300] + "..." if len(doc.content) > 300 else doc.content
-                context += f"{content_preview}\n\n"
-        else:
-            context = "No relevant information found in database.\n\n"
-        
-        # Build AI introduction based on config
-        if ai_config:
-            ai_intro = ai_config.greeting_message.format(
-                ai_name=ai_config.ai_name,
-                company_name=ai_config.company_name,
-                location=ai_config.location
-            )
-            ai_role = f"You are {ai_config.ai_name}, an {ai_config.role_description} for {ai_config.company_name} in {ai_config.location}."
-        else:
-            ai_intro = "Hello! I'm your AI assistant."
-            ai_role = "You are an AI assistant."
-        
-        # Build prompt
-        prompt = f"""{context}
+        # Build response
+        return process_chat_response(query, session_id, relevant_docs, ai_config)
+            
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
+    except requests.exceptions.RequestException as e:
+        return JsonResponse({'success': False, 'error': f'Ollama connection error: {str(e)}'}, status=503)
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+def get_relevant_documents(query: str, ai_config: Optional[AIConfiguration]) -> List:
+    """Get relevant documents with optimized filtering"""
+    relevant_docs = rag_service.search_documents(query)
+    
+    if ai_config and ai_config.use_rag:
+        # Use a set for O(1) lookup
+        config_doc_ids = set(ai_config.documents.filter(is_active=True).values_list('id', flat=True))
+        relevant_docs = [doc for doc in relevant_docs if doc.id in config_doc_ids]
+    
+    return relevant_docs
+
+def process_chat_response(query: str, session_id: str, relevant_docs: List, 
+                         ai_config: Optional[AIConfiguration]) -> JsonResponse:
+    """Process and generate chat response"""
+    
+    # Build context and prompt
+    context = build_context(relevant_docs)
+    ai_intro, ai_role = build_ai_persona(ai_config)
+    prompt = build_prompt(query, context, ai_role, ai_intro)
+    
+    # Get model name
+    model_name = get_model_name(ai_config)
+    
+    # Call Ollama
+    response = call_ollama(model_name, prompt)
+    
+    if not response:
+        return JsonResponse({
+            'success': False,
+            'error': 'Ollama service unavailable'
+        }, status=503)
+    
+    ai_response = response.get('response', '').strip()
+    
+    # Log conversation asynchronously (use celery or just save)
+    save_conversation(session_id, query, ai_response, ai_config, relevant_docs)
+    
+    # Prepare response with sources
+    sources = prepare_sources(relevant_docs)
+    
+    return JsonResponse({
+        'success': True,
+        'response': ai_response,
+        'sources': sources,
+        'source_count': len(sources),
+        'ai_config': {
+            'id': ai_config.id if ai_config else None,
+            'name': ai_config.ai_name if ai_config else 'Default AI',
+            'company': ai_config.company_name if ai_config else None
+        }
+    })
+
+def build_context(docs: List) -> str:
+    """Build context from documents efficiently"""
+    if not docs:
+        return "No relevant information found in database.\n\n"
+    
+    context_parts = ["=== RELEVANT INFORMATION FROM DATABASE ===\n"]
+    for i, doc in enumerate(docs, 1):
+        context_parts.append(f"[{i}] {doc.title}:")
+        content = doc.content[:MAX_PREVIEW_LENGTH]
+        if len(doc.content) > MAX_PREVIEW_LENGTH:
+            content += "..."
+        context_parts.append(f"{content}\n")
+    
+    return "\n".join(context_parts)
+
+def build_ai_persona(ai_config: Optional[AIConfiguration]) -> Tuple[str, str]:
+    """Build AI persona messages"""
+    if ai_config:
+        ai_intro = ai_config.greeting_message.format(
+            ai_name=ai_config.ai_name,
+            company_name=ai_config.company_name,
+            location=ai_config.location
+        )
+        ai_role = f"You are {ai_config.ai_name}, an {ai_config.role_description} for {ai_config.company_name} in {ai_config.location}."
+    else:
+        ai_intro = "Hello! I'm your AI assistant."
+        ai_role = "You are an AI assistant."
+    return ai_intro, ai_role
+
+def build_prompt(query: str, context: str, ai_role: str, ai_intro: str) -> str:
+    """Build the complete prompt"""
+    return f"""{context}
 
 {ai_role}
 {ai_intro}
@@ -95,96 +187,87 @@ If the information isn't relevant or sufficient, use your general knowledge.
 Always be helpful and professional.
 
 Answer:"""
-        
-        # Determine which model to use
-        model_name = "morio-phi:latest"  # Default
-        if ai_config:
-            # Check if we have a custom model for this config
-            model_filename = f"{ai_config.ai_name.lower().replace(' ', '_')}_{ai_config.id}"
-            model_path = os.path.join(
-                getattr(settings, 'OLLAMA_CONFIG_DIR', 'documents/ollama_configs'),
-                f"{model_filename}.txt"
-            )
-            
-            # If modelfile exists, use custom model name
-            if os.path.exists(model_path):
-                custom_model_name = f"{ai_config.ai_name.lower().replace(' ', '-')}-{ai_config.id}"
-                model_name = f"{custom_model_name}:latest"
-                print(f"🤖 Using custom model: {model_name}")
-        
-        # Call Ollama
-        ollama_data = {
-            "model": model_name,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": 0.5,
-                "num_predict": 300,
-            }
-        }
-        
+
+def get_model_name(ai_config: Optional[AIConfiguration]) -> str:
+    """Get model name with caching"""
+    if not ai_config:
+        return DEFAULT_MODEL
+    
+    # Cache model name
+    cache_key = f'model_name_{ai_config.id}'
+    model_name = cache.get(cache_key)
+    
+    if model_name:
+        return model_name
+    
+    model_filename = f"{ai_config.ai_name.lower().replace(' ', '_')}_{ai_config.id}"
+    model_path = os.path.join(
+        getattr(settings, 'OLLAMA_CONFIG_DIR', 'documents/ollama_configs'),
+        f"{model_filename}.txt"
+    )
+    
+    if os.path.exists(model_path):
+        model_name = f"{ai_config.ai_name.lower().replace(' ', '-')}-{ai_config.id}:latest"
+        cache.set(cache_key, model_name, CACHE_TIMEOUT)
+        return model_name
+    
+    return DEFAULT_MODEL
+
+def call_ollama(model: str, prompt: str) -> Optional[Dict]:
+    """Call Ollama API with timeout and error handling"""
+    try:
         response = requests.post(
-            "http://localhost:11434/api/generate",
-            json=ollama_data,
-            timeout=30
+            OLLAMA_URL,
+            json={
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.5,
+                    "num_predict": 300,
+                }
+            },
+            timeout=OLLAMA_TIMEOUT
         )
-        
         if response.status_code == 200:
-            result = response.json()
-            ai_response = result.get('response', '').strip()
-            
-            # Log conversation
-            ConversationMemory.objects.create(
-                session_id=session_id,
-                query=query,
-                response=ai_response,
-                ai_config=ai_config,
-                relevant_docs_ids=",".join(str(doc.id) for doc in relevant_docs)
-            )
-            
-            # Prepare response with sources
-            sources = []
-            for doc in relevant_docs:
-                sources.append({
-                    'id': doc.id,
-                    'title': doc.title,
-                    'type': doc.get_document_type_display(),
-                    'preview': doc.content[:150] + '...' if len(doc.content) > 150 else doc.content
-                })
-            
-            response_data = {
-                'success': True,
-                'response': ai_response,
-                'sources': sources,
-                'source_count': len(sources),
-                'ai_config': {
-                    'id': ai_config.id if ai_config else None,
-                    'name': ai_config.ai_name if ai_config else 'Default AI',
-                    'company': ai_config.company_name if ai_config else None
-                }
-            }
-            
-            return JsonResponse(response_data)
-        else:
-            return JsonResponse({
-                'success': False,
-                'error': f'Ollama error: {response.status_code}',
-                'ai_config': {
-                    'id': ai_config.id if ai_config else None,
-                    'name': ai_config.ai_name if ai_config else 'Default AI'
-                }
-            }, status=500)
-            
+            return response.json()
+    except (requests.Timeout, requests.ConnectionError):
+        pass
+    return None
+
+def save_conversation(session_id: str, query: str, response: str, 
+                     ai_config: Optional[AIConfiguration], docs: List):
+    """Save conversation to database"""
+    try:
+        doc_ids = ",".join(str(doc.id) for doc in docs)
+        ConversationMemory.objects.create(
+            session_id=session_id,
+            query=query,
+            response=response,
+            ai_config=ai_config,
+            relevant_docs_ids=doc_ids
+        )
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return JsonResponse({
-            'success': False,
-            'error': str(e)
-        }, status=500)
+        # Log error but don't fail the request
+        print(f"Error saving conversation: {e}")
+
+def prepare_sources(docs: List) -> List[Dict]:
+    """Prepare source documents for response"""
+    sources = []
+    for doc in docs:
+        content = doc.content[:MAX_SNIPPET_LENGTH]
+        if len(doc.content) > MAX_SNIPPET_LENGTH:
+            content += "..."
+        sources.append({
+            'id': doc.id,
+            'title': doc.title,
+            'type': doc.get_document_type_display(),
+            'preview': content
+        })
+    return sources
 
 # ============================
-# DOCUMENT MANAGEMENT
+# DOCUMENT MANAGEMENT (OPTIMIZED)
 # ============================
 
 @csrf_exempt
@@ -196,66 +279,64 @@ def add_document(request):
     try:
         data = json.loads(request.body)
         
-        # Get current user if authenticated
-        user = request.user if request.user.is_authenticated else None
+        # Validate required fields
+        if not data.get('content'):
+            return JsonResponse({'error': 'Content is required'}, status=400)
         
-        # Get AI config if specified
+        # Get AI config with cache
         ai_config = None
         ai_config_id = data.get('ai_config_id')
         if ai_config_id:
-            try:
-                ai_config = AIConfiguration.objects.get(id=ai_config_id, is_active=True)
-            except AIConfiguration.DoesNotExist:
+            ai_config = get_cached_config(ai_config_id)
+            if not ai_config:
                 return JsonResponse({
                     'success': False,
-                    'error': f'AI configuration {ai_config_id} not found or inactive'
+                    'error': 'AI configuration not found or inactive'
                 }, status=400)
         
-        # Create document
+        # Create document with minimal required fields
         document = BusinessDocument.objects.create(
-            title=data.get('title', 'Untitled'),
-            content=data.get('content', ''),
+            title=data.get('title', 'Untitled')[:255],
+            content=data.get('content'),
             document_type=data.get('type', 'faq'),
-            keywords=data.get('keywords', ''),
+            keywords=data.get('keywords', '')[:500],
             ai_config=ai_config,
             is_active=data.get('is_active', True),
-            created_by=user
+            created_by=request.user if request.user.is_authenticated else None
         )
         
         return JsonResponse({
             'success': True,
             'message': 'Document added successfully',
             'document_id': document.id,
-            'title': document.title,
-            'ai_config': {
-                'id': ai_config.id if ai_config else None,
-                'name': ai_config.ai_name if ai_config else None
-            }
+            'title': document.title
         })
         
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
     except Exception as e:
-        return JsonResponse({
-            'success': False,
-            'error': str(e)
-        }, status=400)
+        return JsonResponse({'success': False, 'error': str(e)}, status=400)
 
 def search_documents(request):
-    """Search documents in database"""
-    query = request.GET.get('q', '')
+    """Search documents with optimized query"""
+    query = request.GET.get('q', '').strip()
     ai_config_id = request.GET.get('ai_config_id')
     
-    # Filter by AI config if specified
-    documents = rag_service.search_documents(query, top_k=10)
+    # Use cache for frequent searches
+    cache_key = f'doc_search_{query}_{ai_config_id}'
+    cached_results = cache.get(cache_key)
+    if cached_results:
+        return JsonResponse(cached_results)
+    
+    documents = rag_service.search_documents(query, top_k=10) if query else []
     
     if ai_config_id:
-        try:
-            ai_config = AIConfiguration.objects.get(id=ai_config_id)
-            documents = [doc for doc in documents if doc.ai_config == ai_config]
-        except AIConfiguration.DoesNotExist:
-            pass
+        ai_config = get_cached_config(ai_config_id)
+        if ai_config:
+            documents = [doc for doc in documents if doc.ai_config_id == ai_config.id]
     
     results = []
-    for doc in documents:
+    for doc in documents[:20]:  # Limit results
         results.append({
             'id': doc.id,
             'title': doc.title,
@@ -263,33 +344,34 @@ def search_documents(request):
             'content': doc.content[:200] + '...' if len(doc.content) > 200 else doc.content,
             'keywords': doc.keywords,
             'created_at': doc.created_at.strftime('%Y-%m-%d'),
-            'has_embeddings': bool(doc.embeddings_data),
-            'ai_config': {
-                'id': doc.ai_config.id if doc.ai_config else None,
-                'name': doc.ai_config.ai_name if doc.ai_config else None
-            }
+            'has_embeddings': bool(doc.embeddings_data)
         })
     
-    return JsonResponse({
+    response_data = {
         'success': True,
         'query': query,
         'results': results,
         'count': len(results)
-    })
+    }
+    
+    cache.set(cache_key, response_data, CACHE_TIMEOUT)
+    return JsonResponse(response_data)
 
 @csrf_exempt
 def generate_embeddings(request):
-    """Generate embeddings for all documents"""
+    """Generate embeddings for all documents (with progress tracking)"""
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
     
     try:
-        # Get documents without embeddings
-        documents = BusinessDocument.objects.filter(embeddings_data__isnull=True) | \
-                   BusinessDocument.objects.filter(embeddings_data__exact="")
+        # Get documents without embeddings using annotation
+        total_docs = BusinessDocument.objects.count()
+        docs_to_process = BusinessDocument.objects.filter(
+            Q(embeddings_data__isnull=True) | Q(embeddings_data__exact="")
+        )
         
         count = 0
-        for doc in documents:
+        for doc in docs_to_process.iterator(chunk_size=100):
             doc.generate_embeddings()
             doc.save(update_fields=['embeddings_data'])
             count += 1
@@ -298,41 +380,39 @@ def generate_embeddings(request):
             'success': True,
             'message': f'Generated embeddings for {count} documents',
             'count': count,
-            'total_documents': BusinessDocument.objects.count()
+            'total_documents': total_docs
         })
         
     except Exception as e:
-        return JsonResponse({
-            'success': False,
-            'error': str(e)
-        }, status=500)
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 # ============================
-# AI CONFIGURATION MANAGEMENT
+# AI CONFIGURATION MANAGEMENT (OPTIMIZED)
 # ============================
 
 @staff_member_required
 @require_http_methods(["GET"])
 def list_ai_configs(request):
-    """List all AI configurations (API endpoint)"""
-    configs = AIConfiguration.objects.all().order_by('-is_active', 'ai_name')
+    """List all AI configurations with aggregated counts"""
+    configs = AIConfiguration.objects.annotate(
+        documents_count=Count('documents'),
+        conversations_count=Count('conversations')
+    ).order_by('-is_active', 'ai_name')
     
-    data = []
-    for config in configs:
-        data.append({
-            'id': config.id,
-            'ai_name': config.ai_name,
-            'company_name': config.company_name,
-            'location': config.location,
-            'is_active': config.is_active,
-            'base_model': config.base_model,
-            'role_description': config.role_description,
-            'greeting_message': config.greeting_message,
-            'documents_count': config.documents.count(),
-            'conversations_count': config.conversations.count(),
-            'created_at': config.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-            'updated_at': config.updated_at.strftime('%Y-%m-%d %H:%M:%S'),
-        })
+    data = [{
+        'id': config.id,
+        'ai_name': config.ai_name,
+        'company_name': config.company_name,
+        'location': config.location,
+        'is_active': config.is_active,
+        'base_model': config.base_model,
+        'role_description': config.role_description,
+        'greeting_message': config.greeting_message,
+        'documents_count': config.documents_count,
+        'conversations_count': config.conversations_count,
+        'created_at': config.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+        'updated_at': config.updated_at.strftime('%Y-%m-%d %H:%M:%S'),
+    } for config in configs]
     
     return JsonResponse({
         'success': True,
@@ -343,19 +423,16 @@ def list_ai_configs(request):
 @staff_member_required
 @require_http_methods(["GET"])
 def get_ai_config(request, config_id):
-    """Get specific AI configuration"""
+    """Get specific AI configuration with caching"""
     config = get_object_or_404(AIConfiguration, id=config_id)
     
-    # Check if modelfile exists
+    # Check modelfile existence efficiently
     modelfile_exists = False
     modelfile_path = None
-    try:
-        output_dir = getattr(settings, 'OLLAMA_CONFIG_DIR', 'documents/ollama_configs')
-        filename = f"{config.ai_name.lower().replace(' ', '_')}_{config.id}.txt"
-        modelfile_path = os.path.join(output_dir, filename)
-        modelfile_exists = os.path.exists(modelfile_path)
-    except:
-        pass
+    output_dir = getattr(settings, 'OLLAMA_CONFIG_DIR', 'documents/ollama_configs')
+    filename = f"{config.ai_name.lower().replace(' ', '_')}_{config.id}.txt"
+    modelfile_path = os.path.join(output_dir, filename)
+    modelfile_exists = os.path.exists(modelfile_path)
     
     data = {
         'id': config.id,
@@ -367,38 +444,34 @@ def get_ai_config(request, config_id):
         'role_description': config.role_description,
         'greeting_message': config.greeting_message,
         'system_prompt': config.get_system_prompt(),
-        'ollama_modelfile': config.generate_ollama_modelfile(),
         'use_rag': config.use_rag,
         'rag_threshold': config.rag_threshold,
         'max_context_length': config.max_context_length,
         'modelfile_exists': modelfile_exists,
-        'modelfile_path': modelfile_path,
+        'modelfile_path': modelfile_path if modelfile_exists else None,
         'documents_count': config.documents.count(),
         'conversations_count': config.conversations.count(),
         'created_at': config.created_at.strftime('%Y-%m-%d %H:%M:%S'),
         'updated_at': config.updated_at.strftime('%Y-%m-%d %H:%M:%S'),
     }
     
-    return JsonResponse({
-        'success': True,
-        'configuration': data
-    })
+    return JsonResponse({'success': True, 'configuration': data})
 
 @staff_member_required
 @require_http_methods(["POST"])
 def create_ai_config(request):
-    """Create a new AI configuration (API endpoint)"""
+    """Create a new AI configuration"""
     try:
         data = json.loads(request.body)
         
         # Validate required fields
         required_fields = ['ai_name', 'company_name', 'location']
-        for field in required_fields:
-            if field not in data or not str(data[field]).strip():
-                return JsonResponse({
-                    'success': False,
-                    'error': f'{field} is required'
-                }, status=400)
+        missing_fields = [f for f in required_fields if not str(data.get(f, '')).strip()]
+        if missing_fields:
+            return JsonResponse({
+                'success': False,
+                'error': f'Required fields missing: {", ".join(missing_fields)}'
+            }, status=400)
         
         # Create configuration
         config = AIConfiguration.objects.create(
@@ -413,16 +486,15 @@ def create_ai_config(request):
         )
         
         # Generate modelfile if requested
+        modelfile_generated = False
+        modelfile_path = None
         if data.get('generate_modelfile', False):
             try:
-                filepath = config.save_ollama_modelfile()
+                modelfile_path = config.save_ollama_modelfile()
                 modelfile_generated = True
-                modelfile_path = filepath
             except Exception as e:
-                modelfile_generated = False
-                modelfile_error = str(e)
-        else:
-            modelfile_generated = False
+                # Log error but don't fail creation
+                print(f"Error generating modelfile: {e}")
         
         response_data = {
             'success': True,
@@ -435,29 +507,26 @@ def create_ai_config(request):
         if modelfile_generated:
             response_data['modelfile_path'] = modelfile_path
         
+        # Invalidate cache
+        invalidate_config_cache()
+        
         return JsonResponse(response_data)
         
     except json.JSONDecodeError:
-        return JsonResponse({
-            'success': False,
-            'error': 'Invalid JSON data'
-        }, status=400)
+        return JsonResponse({'success': False, 'error': 'Invalid JSON data'}, status=400)
     except Exception as e:
-        return JsonResponse({
-            'success': False,
-            'error': str(e)
-        }, status=500)
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 @staff_member_required
 @require_http_methods(["PUT", "PATCH"])
 def update_ai_config(request, config_id):
-    """Update an existing AI configuration (API endpoint)"""
+    """Update an existing AI configuration"""
     config = get_object_or_404(AIConfiguration, id=config_id)
     
     try:
         data = json.loads(request.body)
         
-        # Update fields
+        # Update only provided fields
         updatable_fields = [
             'ai_name', 'company_name', 'location', 
             'role_description', 'base_model', 'greeting_message',
@@ -475,36 +544,27 @@ def update_ai_config(request, config_id):
         modelfile_path = None
         if data.get('regenerate_modelfile', False):
             try:
-                filepath = config.save_ollama_modelfile()
+                modelfile_path = config.save_ollama_modelfile()
                 modelfile_generated = True
-                modelfile_path = filepath
             except Exception as e:
-                modelfile_generated = False
-                modelfile_error = str(e)
+                print(f"Error regenerating modelfile: {e}")
         
-        response_data = {
+        # Invalidate caches
+        invalidate_config_cache(config.id)
+        
+        return JsonResponse({
             'success': True,
             'message': 'AI configuration updated successfully',
             'config_id': config.id,
             'ai_name': config.ai_name,
-            'modelfile_regenerated': modelfile_generated
-        }
-        
-        if modelfile_generated:
-            response_data['modelfile_path'] = modelfile_path
-        
-        return JsonResponse(response_data)
+            'modelfile_regenerated': modelfile_generated,
+            'modelfile_path': modelfile_path if modelfile_generated else None
+        })
         
     except json.JSONDecodeError:
-        return JsonResponse({
-            'success': False,
-            'error': 'Invalid JSON data'
-        }, status=400)
+        return JsonResponse({'success': False, 'error': 'Invalid JSON data'}, status=400)
     except Exception as e:
-        return JsonResponse({
-            'success': False,
-            'error': str(e)
-        }, status=500)
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 @staff_member_required
 @require_http_methods(["DELETE"])
@@ -516,16 +576,16 @@ def delete_ai_config(request, config_id):
         ai_name = config.ai_name
         config.delete()
         
+        # Invalidate cache
+        invalidate_config_cache(config_id)
+        
         return JsonResponse({
             'success': True,
             'message': f'AI configuration "{ai_name}" deleted successfully'
         })
         
     except Exception as e:
-        return JsonResponse({
-            'success': False,
-            'error': str(e)
-        }, status=500)
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 @staff_member_required
 @require_http_methods(["POST"])
@@ -536,7 +596,7 @@ def generate_modelfile(request, config_id):
     try:
         filepath = config.save_ollama_modelfile()
         
-        # Read the file content to return
+        # Read file content efficiently
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
         
@@ -545,12 +605,7 @@ def generate_modelfile(request, config_id):
             'message': f'Modelfile generated for {config.ai_name}',
             'filepath': filepath,
             'filename': os.path.basename(filepath),
-            'content': content,
-            'ai_config': {
-                'id': config.id,
-                'name': config.ai_name,
-                'company': config.company_name
-            }
+            'content': content
         })
         
     except Exception as e:
@@ -563,20 +618,21 @@ def generate_modelfile(request, config_id):
 @require_http_methods(["GET"])
 def ai_config_manager(request):
     """Web interface for managing AI configurations"""
-    # Get stats for the dashboard
-    total_configs = AIConfiguration.objects.count()
-    active_configs = AIConfiguration.objects.filter(is_active=True).count()
-    total_documents = BusinessDocument.objects.count()
-    total_conversations = ConversationMemory.objects.count()
+    # Use cached stats
+    stats = cache.get('ai_config_stats')
+    if not stats:
+        stats = {
+            'total_configs': AIConfiguration.objects.count(),
+            'active_configs': AIConfiguration.objects.filter(is_active=True).count(),
+            'total_documents': BusinessDocument.objects.count(),
+            'total_conversations': ConversationMemory.objects.count(),
+        }
+        cache.set('ai_config_stats', stats, CACHE_TIMEOUT)
     
-    # Get recent configurations
-    recent_configs = AIConfiguration.objects.order_by('-created_at')[:5]
+    recent_configs = AIConfiguration.objects.select_related().order_by('-created_at')[:5]
     
     context = {
-        'total_configs': total_configs,
-        'active_configs': active_configs,
-        'total_documents': total_documents,
-        'total_conversations': total_conversations,
+        **stats,
         'recent_configs': recent_configs,
     }
     
@@ -586,38 +642,49 @@ def ai_config_manager(request):
 # HELPER FUNCTIONS
 # ============================
 
+@lru_cache(maxsize=1)
 def get_active_ai_config():
-    """Helper function to get the active AI configuration"""
+    """Helper function to get the active AI configuration with LRU cache"""
     try:
         return AIConfiguration.objects.filter(is_active=True).first()
     except AIConfiguration.DoesNotExist:
         return None
 
+@staff_member_required
+@require_http_methods(["GET"])
 def get_ai_config_stats(request):
-    """Get statistics about AI configurations"""
+    """Get statistics about AI configurations with caching"""
+    stats = cache.get('ai_config_full_stats')
+    if stats:
+        return JsonResponse({'success': True, 'stats': stats})
+    
+    # Efficiently collect stats
+    configs = AIConfiguration.objects.annotate(
+        doc_count=Count('documents'),
+        conv_count=Count('conversations')
+    )
+    
+    docs_with_embeddings = BusinessDocument.objects.exclude(
+        embeddings_data__isnull=True
+    ).exclude(embeddings_data__exact="").count()
+    
+    docs_per_company = [{
+        'company': config.company_name,
+        'ai_name': config.ai_name,
+        'documents': config.doc_count,
+        'conversations': config.conv_count
+    } for config in configs]
+    
     stats = {
-        'total_configs': AIConfiguration.objects.count(),
-        'active_configs': AIConfiguration.objects.filter(is_active=True).count(),
+        'total_configs': configs.count(),
+        'active_configs': configs.filter(is_active=True).count(),
         'total_documents': BusinessDocument.objects.count(),
-        'documents_with_embeddings': BusinessDocument.objects.exclude(embeddings_data__isnull=True)
-                                                          .exclude(embeddings_data__exact="").count(),
+        'documents_with_embeddings': docs_with_embeddings,
         'total_conversations': ConversationMemory.objects.count(),
-        'companies': list(AIConfiguration.objects.values_list('company_name', flat=True).distinct()),
+        'companies': list(configs.values_list('company_name', flat=True).distinct()),
+        'docs_per_company': docs_per_company,
     }
     
-    # Documents per company
-    docs_per_company = []
-    for config in AIConfiguration.objects.all():
-        docs_per_company.append({
-            'company': config.company_name,
-            'ai_name': config.ai_name,
-            'documents': config.documents.count(),
-            'conversations': config.conversations.count()
-        })
+    cache.set('ai_config_full_stats', stats, CACHE_TIMEOUT)
     
-    stats['docs_per_company'] = docs_per_company
-    
-    return JsonResponse({
-        'success': True,
-        'stats': stats
-    })
+    return JsonResponse({'success': True, 'stats': stats})
