@@ -4,7 +4,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.contrib.admin.views.decorators import staff_member_required
 from django.views.decorators.http import require_http_methods
 from django.shortcuts import render, get_object_or_404
-from django.db.models import Count, Q
+from django.db.models import Count, 
 from django.core.cache import cache
 import json
 import requests
