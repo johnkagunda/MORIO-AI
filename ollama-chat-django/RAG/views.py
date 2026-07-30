@@ -1,10 +1,10 @@
-# RAG/views.py - Optimized version
+# RAG/views.py - Version 1: Base Optimized
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.admin.views.decorators import staff_member_required
 from django.views.decorators.http import require_http_methods
 from django.shortcuts import render, get_object_or_404
-from django.db.models import Count, 
+from django.db.models import Count, Q
 from django.core.cache import cache
 import json
 import requests
@@ -58,7 +58,7 @@ def invalidate_config_cache(config_id: Optional[int] = None):
         cache.delete(f'ai_config_{config_id}')
 
 # ============================
-# RAG CHAT ENDPOINT (OPTIMIZED)
+# RAG CHAT ENDPOINT
 # ============================
 
 @csrf_exempt
@@ -97,7 +97,6 @@ def get_relevant_documents(query: str, ai_config: Optional[AIConfiguration]) -> 
     relevant_docs = rag_service.search_documents(query)
     
     if ai_config and ai_config.use_rag:
-        # Use a set for O(1) lookup
         config_doc_ids = set(ai_config.documents.filter(is_active=True).values_list('id', flat=True))
         relevant_docs = [doc for doc in relevant_docs if doc.id in config_doc_ids]
     
@@ -106,16 +105,10 @@ def get_relevant_documents(query: str, ai_config: Optional[AIConfiguration]) -> 
 def process_chat_response(query: str, session_id: str, relevant_docs: List, 
                          ai_config: Optional[AIConfiguration]) -> JsonResponse:
     """Process and generate chat response"""
-    
-    # Build context and prompt
     context = build_context(relevant_docs)
     ai_intro, ai_role = build_ai_persona(ai_config)
     prompt = build_prompt(query, context, ai_role, ai_intro)
-    
-    # Get model name
     model_name = get_model_name(ai_config)
-    
-    # Call Ollama
     response = call_ollama(model_name, prompt)
     
     if not response:
@@ -125,11 +118,7 @@ def process_chat_response(query: str, session_id: str, relevant_docs: List,
         }, status=503)
     
     ai_response = response.get('response', '').strip()
-    
-    # Log conversation asynchronously (use celery or just save)
     save_conversation(session_id, query, ai_response, ai_config, relevant_docs)
-    
-    # Prepare response with sources
     sources = prepare_sources(relevant_docs)
     
     return JsonResponse({
@@ -193,7 +182,6 @@ def get_model_name(ai_config: Optional[AIConfiguration]) -> str:
     if not ai_config:
         return DEFAULT_MODEL
     
-    # Cache model name
     cache_key = f'model_name_{ai_config.id}'
     model_name = cache.get(cache_key)
     
@@ -248,7 +236,6 @@ def save_conversation(session_id: str, query: str, response: str,
             relevant_docs_ids=doc_ids
         )
     except Exception as e:
-        # Log error but don't fail the request
         print(f"Error saving conversation: {e}")
 
 def prepare_sources(docs: List) -> List[Dict]:
@@ -267,7 +254,7 @@ def prepare_sources(docs: List) -> List[Dict]:
     return sources
 
 # ============================
-# DOCUMENT MANAGEMENT (OPTIMIZED)
+# DOCUMENT MANAGEMENT
 # ============================
 
 @csrf_exempt
@@ -279,11 +266,9 @@ def add_document(request):
     try:
         data = json.loads(request.body)
         
-        # Validate required fields
         if not data.get('content'):
             return JsonResponse({'error': 'Content is required'}, status=400)
         
-        # Get AI config with cache
         ai_config = None
         ai_config_id = data.get('ai_config_id')
         if ai_config_id:
@@ -294,7 +279,6 @@ def add_document(request):
                     'error': 'AI configuration not found or inactive'
                 }, status=400)
         
-        # Create document with minimal required fields
         document = BusinessDocument.objects.create(
             title=data.get('title', 'Untitled')[:255],
             content=data.get('content'),
@@ -322,7 +306,6 @@ def search_documents(request):
     query = request.GET.get('q', '').strip()
     ai_config_id = request.GET.get('ai_config_id')
     
-    # Use cache for frequent searches
     cache_key = f'doc_search_{query}_{ai_config_id}'
     cached_results = cache.get(cache_key)
     if cached_results:
@@ -336,7 +319,7 @@ def search_documents(request):
             documents = [doc for doc in documents if doc.ai_config_id == ai_config.id]
     
     results = []
-    for doc in documents[:20]:  # Limit results
+    for doc in documents[:20]:
         results.append({
             'id': doc.id,
             'title': doc.title,
@@ -364,7 +347,6 @@ def generate_embeddings(request):
         return JsonResponse({'error': 'Method not allowed'}, status=405)
     
     try:
-        # Get documents without embeddings using annotation
         total_docs = BusinessDocument.objects.count()
         docs_to_process = BusinessDocument.objects.filter(
             Q(embeddings_data__isnull=True) | Q(embeddings_data__exact="")
@@ -387,7 +369,7 @@ def generate_embeddings(request):
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 # ============================
-# AI CONFIGURATION MANAGEMENT (OPTIMIZED)
+# AI CONFIGURATION MANAGEMENT
 # ============================
 
 @staff_member_required
@@ -426,7 +408,6 @@ def get_ai_config(request, config_id):
     """Get specific AI configuration with caching"""
     config = get_object_or_404(AIConfiguration, id=config_id)
     
-    # Check modelfile existence efficiently
     modelfile_exists = False
     modelfile_path = None
     output_dir = getattr(settings, 'OLLAMA_CONFIG_DIR', 'documents/ollama_configs')
@@ -464,7 +445,6 @@ def create_ai_config(request):
     try:
         data = json.loads(request.body)
         
-        # Validate required fields
         required_fields = ['ai_name', 'company_name', 'location']
         missing_fields = [f for f in required_fields if not str(data.get(f, '')).strip()]
         if missing_fields:
@@ -473,7 +453,6 @@ def create_ai_config(request):
                 'error': f'Required fields missing: {", ".join(missing_fields)}'
             }, status=400)
         
-        # Create configuration
         config = AIConfiguration.objects.create(
             ai_name=data['ai_name'].strip(),
             company_name=data['company_name'].strip(),
@@ -485,7 +464,6 @@ def create_ai_config(request):
             is_active=data.get('is_active', True)
         )
         
-        # Generate modelfile if requested
         modelfile_generated = False
         modelfile_path = None
         if data.get('generate_modelfile', False):
@@ -493,7 +471,6 @@ def create_ai_config(request):
                 modelfile_path = config.save_ollama_modelfile()
                 modelfile_generated = True
             except Exception as e:
-                # Log error but don't fail creation
                 print(f"Error generating modelfile: {e}")
         
         response_data = {
@@ -507,7 +484,6 @@ def create_ai_config(request):
         if modelfile_generated:
             response_data['modelfile_path'] = modelfile_path
         
-        # Invalidate cache
         invalidate_config_cache()
         
         return JsonResponse(response_data)
@@ -526,7 +502,6 @@ def update_ai_config(request, config_id):
     try:
         data = json.loads(request.body)
         
-        # Update only provided fields
         updatable_fields = [
             'ai_name', 'company_name', 'location', 
             'role_description', 'base_model', 'greeting_message',
@@ -539,7 +514,6 @@ def update_ai_config(request, config_id):
         
         config.save()
         
-        # Regenerate modelfile if requested
         modelfile_generated = False
         modelfile_path = None
         if data.get('regenerate_modelfile', False):
@@ -549,7 +523,6 @@ def update_ai_config(request, config_id):
             except Exception as e:
                 print(f"Error regenerating modelfile: {e}")
         
-        # Invalidate caches
         invalidate_config_cache(config.id)
         
         return JsonResponse({
@@ -575,8 +548,6 @@ def delete_ai_config(request, config_id):
     try:
         ai_name = config.ai_name
         config.delete()
-        
-        # Invalidate cache
         invalidate_config_cache(config_id)
         
         return JsonResponse({
@@ -596,7 +567,6 @@ def generate_modelfile(request, config_id):
     try:
         filepath = config.save_ollama_modelfile()
         
-        # Read file content efficiently
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
         
@@ -618,7 +588,6 @@ def generate_modelfile(request, config_id):
 @require_http_methods(["GET"])
 def ai_config_manager(request):
     """Web interface for managing AI configurations"""
-    # Use cached stats
     stats = cache.get('ai_config_stats')
     if not stats:
         stats = {
@@ -658,7 +627,6 @@ def get_ai_config_stats(request):
     if stats:
         return JsonResponse({'success': True, 'stats': stats})
     
-    # Efficiently collect stats
     configs = AIConfiguration.objects.annotate(
         doc_count=Count('documents'),
         conv_count=Count('conversations')
